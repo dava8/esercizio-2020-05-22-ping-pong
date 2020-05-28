@@ -2,13 +2,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/mman.h>
-
+#include<stdio.h>
+#include <stdlib.h>
 #include <errno.h>
 
 /*
@@ -30,93 +32,147 @@ fino a MAX_VALUE, quando termina il programma.
 
  */
 
-#define MAX_VALUE 1000000
+#define MAX_VALUE 10000
 
-#define CHECK_ERR(a,msg) {if ((a) == -1) { perror((msg)); exit(EXIT_FAILURE); } }
-
-int pipeA[2];
-int pipeB[2];
-// proc_padre legge da pipeB, scrive su pipeA
-// proc_figlio legge da pipeA, scrive su pipeB
 
 int main() {
 
-	int res;
-	int counter = 0;
+	int pipeA[2];
+	int pipeB[2];
+	char buf[sizeof(int)];
 
-	res = pipe(pipeA);
-	CHECK_ERR(res, "pipe")
+	if (pipe(pipeA) == -1) {
+		perror("problema con pipe");
 
-	res = pipe(pipeB);
-	CHECK_ERR(res, "pipe")
+		exit(EXIT_FAILURE);
+	}
+	if (pipe(pipeB) == -1) {
+		perror("problema con pipe");
 
-	switch(fork()) {
-		case 0: // child process
+		exit(EXIT_FAILURE);
+	}
 
-			// proc_figlio legge da pipeA, scrive su pipeB
-			close(pipeA[1]);
-			close(pipeB[0]);
 
-			while (counter < MAX_VALUE) {
+	switch (fork()) {
+		case -1:
+			perror("problema con fork");
 
-				res = read(pipeA[0], &counter, sizeof(counter));
-				CHECK_ERR(res,"read")
+			exit(EXIT_FAILURE);
 
-				if (res == 0) {
-					printf("[child] EOF su pipeA\n");
-					break;
+		case 0: // processo FIGLIO: leggerà dalla PIPE
+
+			close(pipeA[1]); // chiudiamo l'estremità di scrittura della pipe, non ci serve
+
+			while (1) {
+
+				int numRead = read(pipeA[0], buf, sizeof(int));
+
+				if (numRead == 0)
+					break; // EOF: la pipe è stata chiusa dal lato di scrittura
+
+				//converto la stringa ricevuta il numero
+
+				int x = atoi(buf);
+				++x; //incremento di 1
+
+				//se arrivo a MAX_VALUE chiudo la pipe dove child invia così che parent esca
+				//dal ciclo
+
+				if(x>=MAX_VALUE){
+
+					close(pipeB[1]);
+
+
+				}else{
+
+					char str[sizeof(int) * 4 + 1];
+					sprintf(str, "%d", x);
+
+
+					int len = strlen(str);
+
+
+					write(pipeB[1], str, len); // scriviamo sull'estremità di scrittura della pipe
 				}
 
-				printf("[child] dopo read: counter=%d\n", counter);
 
-				counter++;
+				if (numRead == -1) {
+					perror("errore in read");
+					exit(EXIT_FAILURE);
+				}
 
-				printf("[child] prima di write: counter=%d\n", counter);
 
-				res = write(pipeB[1], &counter, sizeof(counter));
-				CHECK_ERR(res,"write")
+				printf("CHILD : colpisco %d\n",x);
+
+
+
 			}
 
-			printf("[child] fuori da while: counter=%d\n", counter);
+			close(pipeA[0]); // chiudiamo l'estremità di lettura della pipe, ora il kernel libera tutta la struttura di pipe
+			close(pipeB[1]);
 
-			printf("[child] bye\n");
+			//printf("ciao\n");
+
+			exit(EXIT_SUCCESS); // fine del processo figlio
+
+
+		default:
+			// processo PADRE: scriverà dentro la PIPE
+
+			close(pipeA[0]); // chiudiamo l'estremità di lettura della pipe, non ci serve
+			close(pipeB[1]);
+
+			int start =0; //int di partenza
+
+			char str[sizeof(int)];
+			sprintf(str, "%d", start);
+
+			printf("PARENT : batto %d\n",start);
+			int len = strlen(str);
+
+			write(pipeA[1], str, len); // scriviamo sull'estremità di scrittura della pipe
+
+			while (1) {
+
+				int numRead = read(pipeB[0], buf, sizeof(int));
+				if (numRead == 0)
+					break;
+
+				//converto in numero e incremento
+				int x = atoi(buf);
+				++x;
+
+				//se colpisco per l'ultima volta chiuso la pipe così che il child esca dal while
+				if(x>=MAX_VALUE){
+
+					close(pipeA[1]);
+
+				}else{
+
+
+					char str[sizeof(int) * 4 + 1];
+					sprintf(str, "%d", x);
+
+					int len = strlen(str);
+
+
+					write(pipeA[1], str, len); // scriviamo sull'estremità di scrittura della pipe
+				}
+
+
+				if (numRead == -1) {
+					perror("errore in read");
+					exit(EXIT_FAILURE);
+				}
+
+				printf("PARENT : colpisco %d\n",x);
+
+
+			}
+fine:
+			wait(NULL); // aspettiamo la terminazione del processo figlio
 
 			exit(EXIT_SUCCESS);
-		case -1:
-			perror("fork()");
-			exit(EXIT_FAILURE);
-		default:
-			;
+
 	}
-
-	// proc_padre legge da pipeB, scrive su pipeA
-	close(pipeA[0]);
-	close(pipeB[1]);
-
-	while (counter < MAX_VALUE) {
-
-		printf("[parent] prima di write: counter=%d\n", counter);
-
-		res = write(pipeA[1], &counter, sizeof(counter));
-		CHECK_ERR(res,"write")
-
-		res = read(pipeB[0], &counter, sizeof(counter));
-		CHECK_ERR(res,"read")
-
-		if (res == 0) {
-			printf("[parent] EOF su pipeA\n");
-			break;
-		}
-
-		printf("[parent] dopo read: counter=%d\n", counter);
-
-		counter++;
-	}
-
-	printf("[parent] fuori da while: counter=%d\n", counter);
-
-	printf("[parent] bye\n");
-
-
-	return 0;
 }
